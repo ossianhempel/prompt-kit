@@ -1,0 +1,24 @@
+{
+  "name": "@prompt-kit/mcp",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "bin": {
+    "promptkit-mcp": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.1",
+    "@prompt-kit/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "tsx": "^4.20.5",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@prompt-kit/daemon",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "clean": "rm -rf dist",
+    "dev": "pnpm -C ../.. --filter @prompt-kit/core --filter @prompt-kit/protocol build && tsx watch src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@prompt-kit/core": "workspace:*",
+    "@prompt-kit/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "tsx": "^4.20.5",
+    "typescript": "^5.7.2"
+  }
+}
