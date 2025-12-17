@@ -1,0 +1,31 @@
+{
+  "name": "prompt-kit",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "clean": "pnpm -r clean",
+    "check": "pnpm format && pnpm lint && pnpm typecheck && pnpm test",
+    "dev": "pnpm -r --parallel dev",
+    "dev:desktop": "node scripts/dev-desktop.mjs",
+    "desktop": "pnpm --filter @prompt-kit/desktop tauri dev",
+    "daemon": "pnpm --filter @prompt-kit/daemon dev",
+    "format": "biome format --write .",
+    "lint": "biome check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run --exclude **/*.int.test.ts",
+    "test:integration": "vitest run apps/daemon/test/daemon.int.test.ts",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "pnpm --filter @prompt-kit/core --filter @prompt-kit/protocol build && pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^22.13.5",
+    "@vitest/coverage-v8": "^4.0.16",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.2",
+    "vitest": "^4.0.16"
+  }
+}

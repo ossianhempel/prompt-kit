@@ -1,0 +1,13 @@
+.DS_Store
+.idea
+.vscode
+
+node_modules/
+dist/
+.turbo/
+.pnpm-store/
+coverage/
+
+*.log
+
+apps/desktop/src-tauri/target/

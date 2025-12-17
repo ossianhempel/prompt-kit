@@ -1,0 +1,11 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+trustedDependencies:
+  - "@biomejs/biome"
+  - "esbuild"
+  - "tree-sitter"
+  - "tree-sitter-javascript"
+  - "tree-sitter-rust"
+  - "tree-sitter-typescript"
