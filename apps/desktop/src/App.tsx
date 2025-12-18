@@ -246,6 +246,67 @@ function parseDiscoverSelection(raw: string): SelectionEntry[] {
   return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 
+const FILE_TYPE_MAP: Record<string, string> = {
+  js: "js",
+  jsx: "jsx",
+  ts: "ts",
+  tsx: "tsx",
+  css: "css",
+  html: "html",
+  json: "json",
+  md: "md",
+  py: "py",
+  rs: "rs",
+  go: "go",
+  c: "c",
+  cpp: "cpp",
+};
+
+function getFileIcon(ext: string) {
+  const kind = FILE_TYPE_MAP[ext] || "txt";
+  return (
+    <span className={`fileIcon fileIcon-${kind}`} title={ext}>
+      {kind.slice(0, 2)}
+    </span>
+  );
+}
+
+function highlightSearch(text: string, query: string) {
+  if (!query.trim()) return <span>{text}</span>;
+  const parts = text.split(new RegExp(`(${query})`, "gi"));
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.toLowerCase() === query.toLowerCase() ? (
+          <mark key={i} className="highlight">
+            {part}
+          </mark>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
+function highlightCode(line: string) {
+  let html = line
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  // String literals
+  html = html.replace(/(["'`])(?:(?=(\\?))\2.)*?\1/g, '<span class="token-string">$&</span>');
+  // Keywords
+  html = html.replace(/\b(const|let|var|function|return|if|else|for|while|import|export|from|class|extends|interface|type|public|private|protected|async|await|default|new|this|throw|try|catch|finally|switch|case|break|continue|yield|as|in|of|void|any|number|string|boolean|true|false)\b/g, '<span class="token-keyword">$1</span>');
+  // Comments
+  html = html.replace(/(\/\/.*)/g, '<span class="token-comment">$1</span>');
+  // Functions
+  html = html.replace(/\b([a-zA-Z_]\w*)(?=\s*\()/g, '<span class="token-function">$1</span>');
+
+  return <span dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
 function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1383,6 +1444,13 @@ function App() {
         </div>
 
         <div className="tabs">
+          <div
+            className="tab-indicator"
+            style={{
+              transform: `translateX(${activeTab === "compose" ? 0 : activeTab === "discover" ? 100 : 200}%)`,
+              width: "calc(33.333% - 2.66px)",
+            }}
+          />
           <button
             type="button"
             className={activeTab === "compose" ? "tab tab-active" : "tab"}
@@ -1562,7 +1630,7 @@ function App() {
                             {selection[m.path] ? "Unselect" : "Select"}
                           </button>
                         </div>
-                        <div className="fileMeta">{m.preview}</div>
+                        <div className="fileMeta">{highlightSearch(m.preview, searchQuery)}</div>
                       </div>
                     ))}
                   </div>
@@ -1606,7 +1674,10 @@ function App() {
                           disabled={!workspaceId}
                           title={f.path}
                         >
-                          {f.path}
+                          <div className="row gap-xs">
+                            {getFileIcon(f.path.split(".").pop() || "")}
+                            <span>{f.path}</span>
+                          </div>
                         </button>
                         <span className="fileMeta">
                           {f.isBinary ? "bin" : "txt"} ·{" "}
@@ -1839,7 +1910,7 @@ function App() {
                               >
                                 {lineNo}
                               </button>
-                              <span className="codeText">{line}</span>
+                              <span className="codeText">{highlightCode(line)}</span>
                             </div>
                           );
                         })}

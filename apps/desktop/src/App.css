@@ -42,6 +42,11 @@
 
 body {
   margin: 0;
+  overflow: hidden;
+}
+
+.row.gap-xs {
+  gap: 6px;
 }
 
 .app {
@@ -63,8 +68,10 @@ body {
 .brand {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  min-width: max-content;
+  gap: 12px;
+  width: 280px;
+  /* Rigorously fixed to prevent any shifting */
+  flex-shrink: 0;
 }
 
 .brandTitle {
@@ -76,10 +83,11 @@ body {
 
 .brandSub {
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 600;
   color: #71717a;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  white-space: nowrap;
 }
 
 .controls {
@@ -107,26 +115,56 @@ body {
   width: 200px;
 }
 
+.tabs {
+  display: flex;
+  position: relative;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  width: 320px;
+}
+
 .tab {
-  height: var(--component-height);
-  padding: 0 16px;
-  font-size: var(--font-size-ui);
+  flex: 1;
+  /* Equal widths */
+  position: relative;
+  z-index: 1;
+  height: 32px;
+  padding: 0;
+  font-size: 13px;
   font-weight: 500;
   color: #a1a1aa;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  border: 1px solid transparent;
+  transition: color 0.2s ease;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .tab:hover {
   color: #fff;
-  background: rgba(255, 255, 255, 0.05);
 }
 
 .tab-active {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: var(--border-color);
   color: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.tab-indicator {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  height: calc(100% - 8px);
+  width: calc(33.333% - 2.66px);
+  /* Precision for 3 items */
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
 .controls {
@@ -194,7 +232,7 @@ body {
   padding: var(--spacing-md);
   overflow: hidden;
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .panel:hover {
@@ -209,12 +247,77 @@ body {
   padding-bottom: var(--spacing-sm);
   border-bottom: 1px solid var(--border-color);
   margin-bottom: var(--spacing-md);
+  height: 32px;
+  /* Fixed height for stability */
+  flex-shrink: 0;
 }
 
 .panelSection {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
+}
+
+.fileIcon {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 900;
+  border-radius: 3px;
+  color: #fff;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.fileIcon-js {
+  background: #f7df1e;
+  color: #000;
+}
+
+.fileIcon-ts {
+  background: #3178c6;
+}
+
+.fileIcon-tsx {
+  background: #3178c6;
+}
+
+.fileIcon-css {
+  background: #1572b6;
+}
+
+.fileIcon-html {
+  background: #e34f26;
+}
+
+.fileIcon-json {
+  background: #fbc02d;
+  color: #000;
+}
+
+.fileIcon-md {
+  background: #000;
+  border: 1px solid #333;
+}
+
+.fileIcon-py {
+  background: #3776ab;
+}
+
+.fileIcon-rs {
+  background: #000;
+  border: 1px solid #333;
+}
+
+.fileIcon-bin {
+  background: #71717a;
+}
+
+.fileIcon-txt {
+  background: #52525b;
 }
 
 .panelActions {
@@ -272,13 +375,13 @@ body {
 }
 
 .fileRow {
-  display: grid;
-  grid-template-columns: 20px 1fr auto;
-  gap: var(--spacing-sm);
+  display: flex;
   align-items: center;
-  padding: 10px 14px;
+  gap: 12px;
+  padding: 8px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   font-size: var(--font-size-ui);
+  cursor: pointer;
 }
 
 .fileRow:hover {
@@ -374,13 +477,18 @@ input {
 
 textarea {
   width: 100%;
+  padding: 12px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-color);
-  background: var(--bg-app);
-  color: #fff;
-  padding: 12px;
-  font-size: var(--font-size-code);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  background: var(--bg-input);
+  color: #fafafa;
+  font-family: var(--font-size-base);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 120px;
+  /* Base stability */
+  transition: border-color 0.2s ease;
 }
 
 input:focus,
@@ -761,12 +869,37 @@ button.secondary:hover {
   text-overflow: ellipsis;
 }
 
+.token-keyword {
+  color: #818cf8;
+  font-weight: 600;
+}
+
+.token-string {
+  color: #34d399;
+}
+
+.token-comment {
+  color: #52525b;
+  font-style: italic;
+}
+
+.token-function {
+  color: #fbbf24;
+}
+
+.highlight {
+  background: rgba(99, 102, 241, 0.3);
+  color: #fff;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
 .checkbox {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
-  opacity: 0.85;
+  font-size: 13px;
+  cursor: pointer;
 }
 
 .checkbox input {
