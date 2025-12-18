@@ -1145,18 +1145,18 @@ function App() {
         "</file_map>",
         ...(gitStatus.isRepo && changed.length
           ? [
-              "",
-              "Recently changed files (git diff HEAD):",
-              "<changed_files>",
-              ...changed,
-              "</changed_files>",
-            ]
+            "",
+            "Recently changed files (git diff HEAD):",
+            "<changed_files>",
+            ...changed,
+            "</changed_files>",
+          ]
           : []),
         ...(truncated
           ? [
-              "",
-              `Note: <file_map> was truncated to ${fileMapPaths.length} of ${allPaths.length} paths.`,
-            ]
+            "",
+            `Note: <file_map> was truncated to ${fileMapPaths.length} of ${allPaths.length} paths.`,
+          ]
           : []),
         "",
         "Return ONLY valid JSON. No prose, no markdown.",
@@ -1410,11 +1410,21 @@ function App() {
         </div>
 
         <div className="controls">
-          <button type="button" onClick={startDaemon} disabled={busy}>
-            Start daemon
+          <button
+            type="button"
+            className="secondary"
+            onClick={startDaemon}
+            disabled={busy}
+          >
+            Start
           </button>
-          <button type="button" onClick={stopDaemon} disabled={busy}>
-            Stop daemon
+          <button
+            type="button"
+            className="secondary"
+            onClick={stopDaemon}
+            disabled={busy}
+          >
+            Stop
           </button>
           <span
             className={`pill pill-${daemonHealth}`}
@@ -1435,6 +1445,7 @@ function App() {
           </label>
           <button
             type="button"
+            className="secondary"
             onClick={() => checkDaemonHealth(daemonRpcUrl)}
             disabled={busy}
           >
@@ -1442,6 +1453,7 @@ function App() {
           </button>
           <button
             type="button"
+            className="secondary"
             onClick={openWorkspace}
             disabled={busy || daemonHealth !== "ok"}
           >
@@ -1476,6 +1488,7 @@ function App() {
                 />
                 <button
                   type="button"
+                  className="secondary"
                   onClick={refreshFileTree}
                   disabled={busy || !workspaceId}
                 >
@@ -1497,6 +1510,7 @@ function App() {
                 />
                 <button
                   type="button"
+                  className="secondary"
                   onClick={runSearch}
                   disabled={busy || !workspaceId || searchLoading}
                   title="Searches within workspace text files"
@@ -1505,6 +1519,7 @@ function App() {
                 </button>
                 <button
                   type="button"
+                  className="secondary"
                   onClick={() => {
                     setSearchQuery("");
                     setSearchResults([]);
@@ -1628,6 +1643,7 @@ function App() {
                     ) : null}
                     <button
                       type="button"
+                      className="secondary"
                       onClick={loadActiveFile}
                       disabled={
                         !activeFilePath || !workspaceId || activeFileLoading
@@ -1638,6 +1654,7 @@ function App() {
                     {activeFilePath && !selection[activeFilePath] ? (
                       <button
                         type="button"
+                        className="primary"
                         onClick={() => toggleSelected(activeFilePath)}
                         disabled={busy}
                       >
@@ -1689,6 +1706,7 @@ function App() {
                       />
                       <button
                         type="button"
+                        className="primary"
                         onClick={handleAddSliceFromInputs}
                         disabled={busy || !activeFilePath}
                       >
@@ -1696,6 +1714,7 @@ function App() {
                       </button>
                       <button
                         type="button"
+                        className="secondary"
                         onClick={() => {
                           setPendingSliceStart(null);
                           clearSlices(activeFilePath);
@@ -1845,65 +1864,78 @@ function App() {
                 </div>
               </div>
 
-              <div className="row gap">
-                <select
-                  value={presetScope}
-                  onChange={(e) => {
-                    setActivePresetId("");
-                    setPresetScope(e.currentTarget.value as PresetScope);
-                  }}
-                  disabled={busy}
-                >
-                  <option value="workspace">Workspace presets</option>
-                  <option value="global">Global presets</option>
-                </select>
-                <select
-                  value={activePresetId}
-                  onChange={(e) => {
-                    const id = e.currentTarget.value;
-                    setActivePresetId(id);
-                    const preset = presets.find((p) => p.id === id);
-                    if (preset) {
-                      applyPreset(preset);
+              <div className="panelSection">
+                <div className="fieldGroup">
+                  <div className="field fieldInline">
+                    <span>Scope</span>
+                    <select
+                      value={presetScope}
+                      onChange={(e) => {
+                        setActivePresetId("");
+                        setPresetScope(e.currentTarget.value as PresetScope);
+                      }}
+                      disabled={busy}
+                    >
+                      <option value="workspace">Workspace</option>
+                      <option value="global">Global</option>
+                    </select>
+                  </div>
+                  <div className="field fieldInline">
+                    <span>Preset</span>
+                    <select
+                      value={activePresetId}
+                      onChange={(e) => {
+                        const id = e.currentTarget.value;
+                        setActivePresetId(id);
+                        const preset = presets.find((p) => p.id === id);
+                        if (preset) {
+                          applyPreset(preset);
+                        }
+                      }}
+                      disabled={busy || presets.length === 0}
+                    >
+                      <option value="">No preset</option>
+                      {presets.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="row gap">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={savePresetAsNew}
+                    disabled={
+                      busy || selectedCount === 0 || sliceIssues.length > 0
                     }
-                  }}
-                  disabled={busy || presets.length === 0}
-                >
-                  <option value="">No preset</option>
-                  {presets.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={savePresetAsNew}
-                  disabled={
-                    busy || selectedCount === 0 || sliceIssues.length > 0
-                  }
-                >
-                  Save as…
-                </button>
-                <button
-                  type="button"
-                  onClick={updateActivePreset}
-                  disabled={
-                    busy ||
-                    !activePreset ||
-                    selectedCount === 0 ||
-                    sliceIssues.length > 0
-                  }
-                >
-                  Update
-                </button>
-                <button
-                  type="button"
-                  onClick={deleteActivePreset}
-                  disabled={busy || !activePreset}
-                >
-                  Delete
-                </button>
+                  >
+                    Save as…
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={updateActivePreset}
+                    disabled={
+                      busy ||
+                      !activePreset ||
+                      selectedCount === 0 ||
+                      sliceIssues.length > 0
+                    }
+                  >
+                    Update
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={deleteActivePreset}
+                    disabled={busy || !activePreset}
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
 
               <label className="field">
@@ -1925,7 +1957,7 @@ function App() {
                 <span>Include file map</span>
               </label>
 
-              <div className="row gap">
+              <div className="fieldGroup">
                 <label className="field fieldInline">
                   <span>Codemaps</span>
                   <select
@@ -1940,40 +1972,43 @@ function App() {
                     <option value="complete">All selected files</option>
                   </select>
                 </label>
-              </div>
 
-              <div className="row gap">
                 <label className="field fieldInline">
                   <span>Git diff</span>
-                  <select
-                    value={gitDiffMode}
-                    onChange={(e) =>
-                      setGitDiffMode(e.currentTarget.value as GitDiffMode)
-                    }
-                    disabled={busy}
-                  >
-                    <option value="none">None</option>
-                    <option value="selected">Selected files</option>
-                    <option value="all_changed">All changed files</option>
-                  </select>
+                  <div className="row gap">
+                    <select
+                      value={gitDiffMode}
+                      onChange={(e) =>
+                        setGitDiffMode(e.currentTarget.value as GitDiffMode)
+                      }
+                      disabled={busy}
+                    >
+                      <option value="none">None</option>
+                      <option value="selected">Selected files</option>
+                      <option value="all_changed">All changed files</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={loadGitStatus}
+                      disabled={busy || !workspaceId || gitStatusLoading}
+                      title="Refresh git status"
+                    >
+                      {gitStatusLoading ? "Git…" : "Git status"}
+                    </button>
+                  </div>
                 </label>
-                <button
-                  type="button"
-                  onClick={loadGitStatus}
-                  disabled={busy || !workspaceId || gitStatusLoading}
-                  title="Refresh git status"
-                >
-                  {gitStatusLoading ? "Git…" : "Git status"}
-                </button>
-                <span
-                  className="badge"
-                  title="Changed files from git diff HEAD"
-                >
-                  {gitStatus.isRepo
-                    ? `${gitStatus.changedFiles.length} changed`
-                    : "not a repo"}
-                </span>
               </div>
+
+              {gitStatus.isRepo ? (
+                <div className="row gap">
+                  <span
+                    className="badge"
+                    title="Changed files from git diff HEAD"
+                  >
+                    {gitStatus.changedFiles.length} changed
+                  </span>
+                </div>
+              ) : null}
 
               {gitStatus.isRepo && gitStatus.changedFiles.length > 0 ? (
                 <details className="details">
@@ -2060,9 +2095,10 @@ function App() {
                 </div>
               ) : null}
 
-              <div className="row gap">
+              <div className="panelActions">
                 <button
                   type="button"
+                  className="primary"
                   onClick={buildPromptFromSelection}
                   disabled={
                     busy ||
@@ -2099,34 +2135,45 @@ function App() {
                 <textarea value={prompt} readOnly spellCheck={false} />
               </label>
 
-              <div className="row gap">
-                <label className="field fieldInline">
-                  <span>Run with</span>
-                  <select
-                    value={provider}
-                    onChange={(e) =>
-                      setProvider(e.currentTarget.value as ProviderId)
-                    }
-                    disabled={busy}
-                  >
-                    <option value="claude_code_cli">
-                      Claude Code (claude)
-                    </option>
-                    <option value="codex_cli">Codex CLI (codex)</option>
-                  </select>
+              <div className="panelSection">
+                <div className="fieldGroup">
+                  <label className="field fieldInline">
+                    <span>Run with</span>
+                    <select
+                      value={provider}
+                      onChange={(e) =>
+                        setProvider(e.currentTarget.value as ProviderId)
+                      }
+                      disabled={busy}
+                    >
+                      <option value="claude_code_cli">
+                        Claude Code (claude)
+                      </option>
+                      <option value="codex_cli">Codex CLI (codex)</option>
+                    </select>
+                  </label>
+                  <label className="field fieldInline">
+                    <span>Model (optional)</span>
+                    <input
+                      value={providerModel}
+                      onChange={(e) => setProviderModel(e.currentTarget.value)}
+                      placeholder="e.g. sonnet, gpt-5, …"
+                      spellCheck={false}
+                      disabled={busy}
+                    />
+                  </label>
+                </div>
+
+                <label className="field">
+                  <span>Provider output</span>
+                  <textarea value={providerOutput} readOnly spellCheck={false} />
                 </label>
-                <label className="field fieldInline">
-                  <span>Model (optional)</span>
-                  <input
-                    value={providerModel}
-                    onChange={(e) => setProviderModel(e.currentTarget.value)}
-                    placeholder="e.g. sonnet, gpt-5, …"
-                    spellCheck={false}
-                    disabled={busy}
-                  />
-                </label>
+              </div>
+
+              <div className="panelActions">
                 <button
                   type="button"
+                  className="primary"
                   onClick={runProvider}
                   disabled={busy || daemonHealth !== "ok" || !prompt}
                   title="Runs locally via the selected CLI (must be installed and authenticated)"
@@ -2134,11 +2181,6 @@ function App() {
                   Run
                 </button>
               </div>
-
-              <label className="field">
-                <span>Provider output</span>
-                <textarea value={providerOutput} readOnly spellCheck={false} />
-              </label>
             </section>
           </>
         ) : activeTab === "discover" ? (
@@ -2155,55 +2197,95 @@ function App() {
                 </div>
               </div>
 
-              <label className="field">
-                <span>Task</span>
-                <textarea
-                  value={discoverTask}
-                  onChange={(e) => setDiscoverTask(e.currentTarget.value)}
-                  placeholder="What are you trying to do? (e.g. add a feature, fix a bug, refactor...)"
-                />
-              </label>
-
-              <div className="row gap">
-                <label className="field fieldInline">
-                  <span>Run with</span>
-                  <select
-                    value={provider}
-                    onChange={(e) =>
-                      setProvider(e.currentTarget.value as ProviderId)
-                    }
-                    disabled={busy}
-                  >
-                    <option value="claude_code_cli">
-                      Claude Code (claude)
-                    </option>
-                    <option value="codex_cli">Codex CLI (codex)</option>
-                  </select>
-                </label>
-                <label className="field fieldInline">
-                  <span>Model (optional)</span>
-                  <input
-                    value={providerModel}
-                    onChange={(e) => setProviderModel(e.currentTarget.value)}
-                    placeholder="e.g. sonnet, gpt-5, …"
-                    spellCheck={false}
-                    disabled={busy}
+              <div className="panelSection">
+                <label className="field">
+                  <span>Task</span>
+                  <textarea
+                    value={discoverTask}
+                    onChange={(e) => setDiscoverTask(e.currentTarget.value)}
+                    placeholder="What are you trying to do? (e.g. add a feature, fix a bug, refactor...)"
                   />
                 </label>
+
+                <div className="fieldGroup">
+                  <label className="field fieldInline">
+                    <span>Run with</span>
+                    <select
+                      value={provider}
+                      onChange={(e) =>
+                        setProvider(e.currentTarget.value as ProviderId)
+                      }
+                      disabled={busy}
+                    >
+                      <option value="claude_code_cli">
+                        Claude Code (claude)
+                      </option>
+                      <option value="codex_cli">Codex CLI (codex)</option>
+                    </select>
+                  </label>
+                  <label className="field fieldInline">
+                    <span>Model (optional)</span>
+                    <input
+                      value={providerModel}
+                      onChange={(e) => setProviderModel(e.currentTarget.value)}
+                      placeholder="e.g. sonnet, gpt-5, …"
+                      spellCheck={false}
+                      disabled={busy}
+                    />
+                  </label>
+                </div>
+
+                <div className="fieldGroup">
+                  <label className="field fieldInline">
+                    <span>Max files</span>
+                    <input
+                      value={discoverMaxFiles}
+                      onChange={(e) => setDiscoverMaxFiles(e.currentTarget.value)}
+                      spellCheck={false}
+                      disabled={busy}
+                    />
+                  </label>
+                  <label className="field fieldInline">
+                    <span>Max steps</span>
+                    <input
+                      value={discoverMaxSteps}
+                      onChange={(e) => setDiscoverMaxSteps(e.currentTarget.value)}
+                      spellCheck={false}
+                      disabled={busy}
+                    />
+                  </label>
+                  <label className="field fieldInline">
+                    <span>Token budget</span>
+                    <input
+                      value={discoverTokenBudget}
+                      onChange={(e) =>
+                        setDiscoverTokenBudget(e.currentTarget.value)
+                      }
+                      spellCheck={false}
+                      disabled={busy}
+                    />
+                  </label>
+                </div>
               </div>
 
-              <div className="row gap">
-                <label className="field fieldInline">
-                  <span>Max files</span>
-                  <input
-                    value={discoverMaxFiles}
-                    onChange={(e) => setDiscoverMaxFiles(e.currentTarget.value)}
-                    spellCheck={false}
-                    disabled={busy}
-                  />
-                </label>
+              <div className="panelActions">
                 <button
                   type="button"
+                  className="primary"
+                  onClick={runDiscovery}
+                  disabled={
+                    busy ||
+                    daemonHealth !== "ok" ||
+                    !workspaceId ||
+                    !discoverTask.trim()
+                  }
+                  title="Runs a multi-step discovery loop (search/read/codemap) to produce a ready-to-paste prompt under a budget"
+                >
+                  Run discovery
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
                   onClick={suggestDiscoverFiles}
                   disabled={
                     busy ||
@@ -2217,42 +2299,6 @@ function App() {
                 </button>
               </div>
 
-              <div className="row gap">
-                <label className="field fieldInline">
-                  <span>Max steps</span>
-                  <input
-                    value={discoverMaxSteps}
-                    onChange={(e) => setDiscoverMaxSteps(e.currentTarget.value)}
-                    spellCheck={false}
-                    disabled={busy}
-                  />
-                </label>
-                <label className="field fieldInline">
-                  <span>Token budget</span>
-                  <input
-                    value={discoverTokenBudget}
-                    onChange={(e) =>
-                      setDiscoverTokenBudget(e.currentTarget.value)
-                    }
-                    spellCheck={false}
-                    disabled={busy}
-                  />
-                </label>
-                <button
-                  type="button"
-                  onClick={runDiscovery}
-                  disabled={
-                    busy ||
-                    daemonHealth !== "ok" ||
-                    !workspaceId ||
-                    !discoverTask.trim()
-                  }
-                  title="Runs a multi-step discovery loop (search/read/codemap) to produce a ready-to-paste prompt under a budget"
-                >
-                  Run discovery
-                </button>
-              </div>
-
               {discoverWarning ? (
                 <div className="warning">{discoverWarning}</div>
               ) : null}
@@ -2260,6 +2306,7 @@ function App() {
               <div className="row gap">
                 <button
                   type="button"
+                  className="secondary"
                   onClick={() => setAllDiscoverSelected(true)}
                   disabled={busy || discoverSuggestions.length === 0}
                 >
@@ -2267,6 +2314,7 @@ function App() {
                 </button>
                 <button
                   type="button"
+                  className="secondary"
                   onClick={() => setAllDiscoverSelected(false)}
                   disabled={busy || discoverSuggestions.length === 0}
                 >
@@ -2388,16 +2436,10 @@ function App() {
                 />
               </label>
 
-              <div className="row gap">
+              <div className="panelActions">
                 <button
                   type="button"
-                  onClick={previewEditsFromXml}
-                  disabled={busy || !workspaceId || daemonHealth !== "ok"}
-                >
-                  Preview
-                </button>
-                <button
-                  type="button"
+                  className="primary"
                   onClick={applySelectedEdits}
                   disabled={
                     busy ||
@@ -2410,6 +2452,15 @@ function App() {
                 </button>
                 <button
                   type="button"
+                  className="secondary"
+                  onClick={previewEditsFromXml}
+                  disabled={busy || !workspaceId || daemonHealth !== "ok"}
+                >
+                  Preview
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
                   onClick={undoLastEdits}
                   disabled={busy || !workspaceId}
                 >
@@ -2428,6 +2479,7 @@ function App() {
                   <div className="row gap">
                     <button
                       type="button"
+                      className="secondary"
                       onClick={() => setAllEditsSelected(true)}
                       disabled={busy}
                     >
@@ -2435,6 +2487,7 @@ function App() {
                     </button>
                     <button
                       type="button"
+                      className="secondary"
                       onClick={() => setAllEditsSelected(false)}
                       disabled={busy}
                     >
