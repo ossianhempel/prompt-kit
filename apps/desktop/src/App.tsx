@@ -348,6 +348,14 @@ function App() {
   const [includeFileMap, setIncludeFileMap] = useState(true);
   const [gitDiffMode, setGitDiffMode] = useState<GitDiffMode>("none");
   const [codemapMode, setCodemapMode] = useState<CodemapMode>("none");
+  const [daemonPopoverOpen, setDaemonPopoverOpen] = useState(false);
+
+  useEffect(() => {
+    if (!daemonPopoverOpen) return;
+    const handler = () => setDaemonPopoverOpen(false);
+    window.addEventListener("click", handler);
+    return () => window.removeEventListener("click", handler);
+  }, [daemonPopoverOpen]);
   const [tokenEstimate, setTokenEstimate] = useState<number | null>(null);
   const [prompt, setPrompt] = useState("");
   const [provider, setProvider] = useState<ProviderId>("claude_code_cli");
@@ -1477,48 +1485,98 @@ function App() {
           </button>
         </div>
 
-        <div className="controls">
+        <div
+          className="daemonMenuContainer"
+          onClick={(e) => e.stopPropagation()}
+        >
           <button
             type="button"
-            className="secondary"
-            onClick={startDaemon}
-            disabled={busy}
+            className={`daemonIndicator ${daemonPopoverOpen ? "active" : ""}`}
+            onClick={() => setDaemonPopoverOpen(!daemonPopoverOpen)}
           >
-            Start
+            <span className={`statusDot statusDot-${daemonHealth}`} />
+            <span>Daemon</span>
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="m6 9 6 6 6-6" />
+            </svg>
           </button>
-          <button
-            type="button"
-            className="secondary"
-            onClick={stopDaemon}
-            disabled={busy}
-          >
-            Stop
-          </button>
-          <span
-            className={`pill pill-${daemonHealth}`}
-            title="The daemon is a local background service that scans files, builds prompts, and runs providers."
-          >
-            daemon: {daemonHealth}
-          </span>
+
+          {daemonPopoverOpen && (
+            <div className="daemonPopover">
+              <div className="popoverSection">
+                <div className="popoverLabel">Status</div>
+                <div className="row gap-sm items-center">
+                  <span className={`pill pill-${daemonHealth}`}>
+                    {daemonHealth === "ok" ? "Running" : "Offline"}
+                  </span>
+                  {busy && <span className="loader-xs" />}
+                </div>
+              </div>
+
+              <div className="popoverSection">
+                <div className="popoverLabel">Controls</div>
+                <div className="row gap">
+                  <button
+                    type="button"
+                    className="secondary sm"
+                    onClick={() => {
+                      void startDaemon();
+                      setDaemonPopoverOpen(false);
+                    }}
+                    disabled={busy || daemonHealth === "ok"}
+                  >
+                    Start
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary sm"
+                    onClick={() => {
+                      void stopDaemon();
+                      setDaemonPopoverOpen(false);
+                    }}
+                    disabled={busy || daemonHealth !== "ok"}
+                  >
+                    Stop
+                  </button>
+                </div>
+              </div>
+
+              <div className="popoverSection">
+                <div className="popoverLabel">Configuration</div>
+                <div className="field">
+                  <span>RPC Endpoint</span>
+                  <div className="row gap-xs">
+                    <input
+                      value={daemonRpcUrl}
+                      onChange={(e) => setDaemonRpcUrl(e.currentTarget.value)}
+                      spellCheck={false}
+                      className="sm"
+                    />
+                    <button
+                      type="button"
+                      className="secondary sm"
+                      onClick={() => checkDaemonHealth(daemonRpcUrl)}
+                      disabled={busy}
+                    >
+                      Check
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="controls grow">
-          <label className="field">
-            <span>RPC</span>
-            <input
-              value={daemonRpcUrl}
-              onChange={(e) => setDaemonRpcUrl(e.currentTarget.value)}
-              spellCheck={false}
-            />
-          </label>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => checkDaemonHealth(daemonRpcUrl)}
-            disabled={busy}
-          >
-            Check
-          </button>
           <button
             type="button"
             className="secondary"

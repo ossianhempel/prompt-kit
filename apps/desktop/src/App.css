@@ -206,6 +206,159 @@ body {
   color: #ef4444;
 }
 
+/* Daemon UI */
+.daemonMenuContainer {
+  position: relative;
+  height: 36px;
+  display: flex;
+  align-items: center;
+}
+
+.daemonIndicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: transparent;
+  color: #a1a1aa;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.daemonIndicator:hover,
+.daemonIndicator.active {
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  border-color: var(--border-color);
+}
+
+.statusDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.statusDot::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  right: -2px;
+  bottom: -2px;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+  opacity: 0.4;
+}
+
+.statusDot-ok {
+  background: #10b981;
+}
+
+.statusDot-ok::after {
+  background: #10b981;
+}
+
+.statusDot-down {
+  background: #ef4444;
+}
+
+.statusDot-down::after {
+  background: #ef4444;
+}
+
+.statusDot-unknown {
+  background: #71717a;
+}
+
+.statusDot-unknown::after {
+  background: #71717a;
+  animation: none;
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.4;
+  }
+
+  50% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+
+  100% {
+    transform: scale(1);
+    opacity: 0.4;
+  }
+}
+
+.daemonPopover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 280px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  box-shadow: 0 12px 24px -6px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.popoverSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.popoverLabel {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #71717a;
+}
+
+/* Utilities */
+.sm {
+  height: 30px !important;
+  font-size: 12px !important;
+  padding: 0 10px !important;
+}
+
+.gap-sm {
+  gap: 8px;
+}
+
+.items-center {
+  align-items: center;
+}
+
+.loader-xs {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .error {
   padding: 10px 12px;
   border-bottom: 1px solid rgba(255, 88, 88, 0.35);
