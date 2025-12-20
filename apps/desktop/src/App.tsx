@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 type DaemonInfo = {
@@ -131,6 +131,32 @@ function clampInt(
   const min = options.min ?? Number.NEGATIVE_INFINITY;
   const max = options.max ?? Number.POSITIVE_INFINITY;
   return Math.max(min, Math.min(max, parsed));
+}
+
+function getBasename(p: string): string {
+  const trimmed = p.replace(/[\\/]+$/g, "");
+  if (!trimmed) return p;
+  const parts = trimmed.split(/[/\\]/);
+  return parts[parts.length - 1] || trimmed;
+}
+
+function sanitizeRootLabel(label: string): string {
+  const cleaned = label.replace(/[\\/]/g, "_").replace(/:/g, "_").trim();
+  return cleaned.length > 0 ? cleaned : "root";
+}
+
+function buildRootLabels(
+  roots: string[],
+): { id: string; path: string }[] {
+  const counts = new Map<string, number>();
+  return roots.map((rootPath) => {
+    const base = getBasename(rootPath) || rootPath;
+    const label = sanitizeRootLabel(base === "/" || base === "\\" ? "root" : base);
+    const count = (counts.get(label) ?? 0) + 1;
+    counts.set(label, count);
+    const id = count === 1 ? label : `${label}~${count}`;
+    return { id, path: rootPath };
+  });
 }
 
 function extractJsonCandidate(text: string): string | null {
@@ -320,7 +346,7 @@ function App() {
     "unknown",
   );
 
-  const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
+  const [workspaceRoots, setWorkspaceRoots] = useState<string[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [files, setFiles] = useState<FileInfo[]>([]);
   const [filter, setFilter] = useState("");
@@ -375,6 +401,7 @@ function App() {
   const [discoverHandoff, setDiscoverHandoff] = useState("");
   const [discoverRawOutput, setDiscoverRawOutput] = useState("");
   const [discoverWarning, setDiscoverWarning] = useState<string | null>(null);
+  const discoverRunIdRef = useRef<string | null>(null);
 
   const [editsXml, setEditsXml] = useState("");
   const [editPreviews, setEditPreviews] = useState<PreviewEdit[]>([]);
@@ -399,6 +426,31 @@ function App() {
     if (!q) return files;
     return files.filter((f) => f.path.toLowerCase().includes(q.toLowerCase()));
   }, [files, filter]);
+
+  const workspaceRootLabels = useMemo(
+    () => buildRootLabels(workspaceRoots),
+    [workspaceRoots],
+  );
+
+  const workspaceRootDisplay = useMemo(() => {
+    if (workspaceRootLabels.length === 0) {
+      return "—";
+    }
+    if (workspaceRootLabels.length === 1) {
+      return workspaceRootLabels[0].path;
+    }
+    return `${workspaceRootLabels.length} roots`;
+  }, [workspaceRootLabels]);
+
+  const workspaceRootTitle = useMemo(
+    () =>
+      workspaceRootLabels.length
+        ? workspaceRootLabels
+            .map((root) => `${root.id} — ${root.path}`)
+            .join("\n")
+        : "",
+    [workspaceRootLabels],
+  );
 
   const selectedCount = useMemo(
     () => Object.keys(selection).length,
@@ -622,20 +674,34 @@ function App() {
     try {
       const selected = await open({
         directory: true,
-        multiple: false,
-        title: "Open workspace folder",
+        multiple: true,
+        title: "Open workspace folder(s)",
       });
 
-      if (!selected || typeof selected !== "string") {
+      if (!selected) {
         return;
       }
 
-      setWorkspaceRoot(selected);
+      const roots = Array.isArray(selected) ? selected : [selected];
+      const seenRoots = new Set<string>();
+      const cleanedRoots = roots
+        .map((root) => root.trim())
+        .filter((root) => root.length > 0)
+        .filter((root) => {
+          if (seenRoots.has(root)) return false;
+          seenRoots.add(root);
+          return true;
+        });
+      if (cleanedRoots.length === 0) {
+        return;
+      }
+
       const openResult = await rpc<{ workspaceId: string }>(
         daemonRpcUrl,
         "workspace.open",
-        { root: selected },
+        cleanedRoots.length > 1 ? { roots: cleanedRoots } : { root: cleanedRoots[0] },
       );
+      setWorkspaceRoots(cleanedRoots);
       setWorkspaceId(openResult.workspaceId);
 
       const tree = await rpc<{ files: FileInfo[] }>(
@@ -1208,7 +1274,9 @@ function App() {
         "Task:",
         task,
         "",
-        "Repository file paths (relative):",
+        workspaceRoots.length > 1
+          ? "Workspace file paths (prefix with root folder name):"
+          : "Repository file paths (relative):",
         "<file_map>",
         ...fileMapPaths,
         "</file_map>",
@@ -1225,6 +1293,12 @@ function App() {
           ? [
             "",
             `Note: <file_map> was truncated to ${fileMapPaths.length} of ${allPaths.length} paths.`,
+          ]
+          : []),
+        ...(workspaceRoots.length > 1
+          ? [
+            "",
+            "Note: file paths include a '<root>/' prefix when multiple roots are open. Return paths exactly as shown.",
           ]
           : []),
         "",
@@ -1330,12 +1404,16 @@ function App() {
     setDiscoverWarning(null);
     setBusy(true);
     try {
-      const result = await rpc<{
-        selection: SelectionEntry[];
-        tokenEstimate: number;
-        handoff: string;
+      setDiscoverSuggestions([]);
+      setDiscoverSelection({});
+      setDiscoverHandoff("");
+      setDiscoverRawOutput("");
+
+      const start = await rpc<{
+        runId: string;
+        status: "running";
         log: string[];
-      }>(daemonRpcUrl, "workspace.discover", {
+      }>(daemonRpcUrl, "workspace.discoverStart", {
         workspaceId,
         task,
         provider,
@@ -1345,21 +1423,57 @@ function App() {
         tokenBudget,
       });
 
-      setDiscoverSuggestions(result.selection);
-      setDiscoverSelection(
-        Object.fromEntries(result.selection.map((s) => [s.path, true])),
-      );
-      setDiscoverHandoff(result.handoff);
-      setDiscoverRawOutput(result.log.join("\n").trimEnd());
+      discoverRunIdRef.current = start.runId;
+      setDiscoverRawOutput(start.log.join("\n").trimEnd());
 
-      if (result.tokenEstimate > tokenBudget) {
-        setDiscoverWarning(
-          `Discovery prompt is ~${result.tokenEstimate} tokens (budget ~${tokenBudget}). Consider reducing max files or switching some files to API-only / slices.`,
+      while (discoverRunIdRef.current === start.runId) {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        if (discoverRunIdRef.current !== start.runId) {
+          break;
+        }
+
+        const status = await rpc<{
+          status: "running" | "complete" | "error";
+          log: string[];
+          selection?: SelectionEntry[];
+          tokenEstimate?: number;
+          handoff?: string;
+          error?: string;
+        }>(daemonRpcUrl, "workspace.discoverStatus", { runId: start.runId });
+
+        if (discoverRunIdRef.current !== start.runId) {
+          break;
+        }
+
+        setDiscoverRawOutput(status.log.join("\n").trimEnd());
+
+        if (status.status === "running") {
+          continue;
+        }
+
+        if (status.status === "error") {
+          setError(status.error ?? "Discovery failed");
+          break;
+        }
+
+        const selection = status.selection ?? [];
+        setDiscoverSuggestions(selection);
+        setDiscoverSelection(
+          Object.fromEntries(selection.map((s) => [s.path, true])),
         );
-      } else {
-        setDiscoverWarning(
-          `Discovery prompt is ~${result.tokenEstimate} tokens.`,
-        );
+        setDiscoverHandoff(status.handoff ?? "");
+
+        const estimate = status.tokenEstimate ?? 0;
+        if (estimate > tokenBudget) {
+          setDiscoverWarning(
+            `Discovery prompt is ~${estimate} tokens (budget ~${tokenBudget}). Consider reducing max files or switching some files to API-only / slices.`,
+          );
+        } else {
+          setDiscoverWarning(
+            `Discovery prompt is ~${estimate} tokens (budget ~${tokenBudget}).`,
+          );
+        }
+        break;
       }
     } catch (e) {
       setDiscoverSuggestions([]);
@@ -1369,6 +1483,7 @@ function App() {
       setDiscoverWarning(null);
       setError(e instanceof Error ? e.message : "Failed to run discovery");
     } finally {
+      discoverRunIdRef.current = null;
       setBusy(false);
     }
   }
@@ -1583,7 +1698,7 @@ function App() {
             onClick={openWorkspace}
             disabled={busy || daemonHealth !== "ok"}
           >
-            Open folder…
+            Open folder(s)…
           </button>
         </div>
       </header>
@@ -1597,11 +1712,7 @@ function App() {
               <div className="panelHeader">
                 <div className="panelTitle">Files</div>
                 <div className="panelMeta">
-                  {workspaceRoot ? (
-                    <span title={workspaceRoot}>{workspaceRoot}</span>
-                  ) : (
-                    <span>—</span>
-                  )}
+                  <span title={workspaceRootTitle}>{workspaceRootDisplay}</span>
                 </div>
               </div>
 
@@ -1702,7 +1813,7 @@ function App() {
                       ? "Daemon is down. Click Start daemon to open a folder and load files."
                       : workspaceId
                         ? "No files found. Try Refresh, or open a different folder."
-                        : "Open folder… to load a repo/workspace."}
+                        : "Open folder(s)… to load a repo/workspace."}
                   </div>
                 ) : (
                   filteredFiles.map((f) => {
@@ -2318,11 +2429,7 @@ function App() {
               <div className="panelHeader">
                 <div className="panelTitle">Discover</div>
                 <div className="panelMeta">
-                  {workspaceRoot ? (
-                    <span title={workspaceRoot}>{workspaceRoot}</span>
-                  ) : (
-                    <span>—</span>
-                  )}
+                  <span title={workspaceRootTitle}>{workspaceRootDisplay}</span>
                 </div>
               </div>
 
@@ -2547,11 +2654,7 @@ function App() {
               <div className="panelHeader">
                 <div className="panelTitle">Apply</div>
                 <div className="panelMeta">
-                  {workspaceRoot ? (
-                    <span title={workspaceRoot}>{workspaceRoot}</span>
-                  ) : (
-                    <span>—</span>
-                  )}
+                  <span title={workspaceRootTitle}>{workspaceRootDisplay}</span>
                 </div>
               </div>
 

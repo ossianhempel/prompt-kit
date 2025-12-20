@@ -7,7 +7,7 @@ Got it - I've updated the task accordingly.
 * Implemented: CLI providers (Codex CLI + Claude Code), and browser handoff (copy prompt + open ChatGPT/Claude)
 * Implemented: In-repo content search in the desktop UI (daemon-backed)
 * Implemented: Unit + integration test suite (Vitest) + dev scripts (`pnpm check`, `pnpm test:coverage`)
-* Not yet: multi-root workspaces, streaming discovery progress, in-app chat, “bundle-first” desktop packaging (no PATH / pnpm required)
+* Implemented: “bundle-first” desktop packaging (no PATH / pnpm required)
 
 
 Below is a concrete, buildable plan for **PromptKit** (Repo Prompt style app) using **Tauri + React** for the desktop UI and a **Node.js MCP server**. I’ll ground this in what Repo Prompt emphasizes (discovery first, token-efficient context, reviewable diffs) plus what you can reuse from **PasteMax** (file tree, token counting, search, watcher, exclusions). ([Repo Prompt][1])
@@ -67,7 +67,7 @@ Implement an agent that:
 * produces a factual “handoff prompt” that clarifies scope and relationships
   Repo Prompt’s blog calls out why this is important (effective context windows vs advertised, and the “agent orientation” cost). ([Repo Prompt][1])
 
-Everything else (in-app chat, delegate agents, benchmarks, etc.) can come after these.
+Everything else (delegate agents, benchmarks, etc.) can come after these.
 
 ## 2) Architecture that fits Tauri + React + Node MCP server
 
@@ -402,12 +402,12 @@ Repo Prompt’s blog mentions a default 60k-ish budget for pasting into certain 
 
 ### Milestone 8: Providers (CLI-first; API later)
 
-**Goal:** PromptKit can run Context Builder and in-app Chat using:
+**Goal:** PromptKit can run Context Builder using:
 
 * local CLI providers (Codex CLI, Claude Code, Gemini CLI) by spawning processes
 * API keys (OpenAI/Anthropic/Gemini) (optional, later)
 
-Even if you delay full in-app chat, you need at least one provider path for discovery.
+You need at least one provider path for discovery.
 
 **Backend**
 
@@ -445,7 +445,6 @@ Then add write tools:
 Then advanced tools:
 
 * `discover_context` (run Context Builder via MCP)
-* `chat_send` and `list_models` (if you build in-app chat)
 
 **Security model**
 

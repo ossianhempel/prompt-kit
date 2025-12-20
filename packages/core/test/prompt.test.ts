@@ -90,4 +90,43 @@ describe("buildPrompt", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("builds prompts across multiple roots with a resolver", async () => {
+    const rootA = mkTempDir();
+    const rootB = mkTempDir();
+    try {
+      writeFileSync(path.join(rootA, "a.txt"), "alpha\n", "utf8");
+      writeFileSync(path.join(rootB, "b.txt"), "beta\n", "utf8");
+
+      const resolver = {
+        resolvePath: (p: string) => {
+          if (p.startsWith("rootA/")) {
+            return { root: rootA, relativePath: p.slice("rootA/".length) };
+          }
+          if (p.startsWith("rootB/")) {
+            return { root: rootB, relativePath: p.slice("rootB/".length) };
+          }
+          return { root: rootA, relativePath: p };
+        },
+      };
+
+      const result = await buildPrompt(
+        resolver,
+        [
+          { path: "rootA/a.txt", mode: "full" },
+          { path: "rootB/b.txt", mode: "full" },
+        ],
+        { includeFileMap: true },
+      );
+
+      expect(result.prompt).toContain("<file_map>");
+      expect(result.prompt).toContain("rootA/a.txt");
+      expect(result.prompt).toContain("rootB/b.txt");
+      expect(result.prompt).toContain("alpha");
+      expect(result.prompt).toContain("beta");
+    } finally {
+      rmSync(rootA, { recursive: true, force: true });
+      rmSync(rootB, { recursive: true, force: true });
+    }
+  });
 });

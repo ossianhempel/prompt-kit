@@ -27,6 +27,8 @@ import {
   BuildPromptParamsSchema,
   DeletePresetParamsSchema,
   DiscoverParamsSchema,
+  DiscoverStartParamsSchema,
+  DiscoverStatusParamsSchema,
   type FileInfo,
   GetCodeStructureParamsSchema,
   GetFileTreeParamsSchema,
@@ -60,13 +62,35 @@ type PresetsFileData = {
 
 type WorkspaceState = {
   id: string;
-  root: string;
+  roots: WorkspaceRoot[];
   rootKey: string;
   files: FileInfo[];
+  filesByRootId: Map<string, FileInfo[]>;
+  filePathSet: Set<string>;
   selection: SelectionEntry[];
 };
 
 const workspaces = new Map<string, WorkspaceState>();
+const discoverRuns = new Map<string, DiscoverRun>();
+
+type WorkspaceRoot = {
+  id: string;
+  path: string;
+  label: string;
+};
+
+type DiscoverRun = {
+  id: string;
+  workspaceId: string;
+  status: "running" | "complete" | "error";
+  log: string[];
+  selection?: SelectionEntry[];
+  tokenEstimate?: number;
+  handoff?: string;
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
+};
 
 const CODEX_BIN =
   (process.env.PROMPTKIT_CODEX_BIN?.trim() || "codex").trim() || "codex";
@@ -265,11 +289,285 @@ function checkpointDir(rootKey: string, checkpointId: string): string {
   return path.join(workspaceCheckpointsDir(rootKey), checkpointId);
 }
 
+function sanitizeRootLabel(label: string): string {
+  const cleaned = label.replaceAll(/[\\/]/g, "_").replaceAll(/:/g, "_").trim();
+  return cleaned.length > 0 ? cleaned : "root";
+}
+
+function buildWorkspaceRoots(rawRoots: string[]): WorkspaceRoot[] {
+  const resolvedRoots: string[] = [];
+  const seen = new Set<string>();
+  for (const root of rawRoots) {
+    const resolved = path.resolve(root);
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    resolvedRoots.push(resolved);
+  }
+
+  const counts = new Map<string, number>();
+  return resolvedRoots.map((rootPath) => {
+    const base = path.basename(rootPath) || rootPath;
+    const label = sanitizeRootLabel(base === path.sep ? "root" : base);
+    const count = (counts.get(label) ?? 0) + 1;
+    counts.set(label, count);
+    const id = count === 1 ? label : `${label}~${count}`;
+    return { id, path: rootPath, label };
+  });
+}
+
+function buildWorkspaceRootKey(roots: WorkspaceRoot[]): string {
+  const sorted = roots.map((r) => path.resolve(r.path)).sort();
+  return sorted.join("::");
+}
+
+function joinWorkspacePath(rootId: string, relativePath: string): string {
+  return normalizeRelativePath(`${rootId}/${relativePath}`);
+}
+
+async function scanWorkspaceRoots(
+  roots: WorkspaceRoot[],
+  prefixPaths: boolean,
+): Promise<{
+  files: FileInfo[];
+  filesByRootId: Map<string, FileInfo[]>;
+  filePathSet: Set<string>;
+}> {
+  const files: FileInfo[] = [];
+  const filesByRootId = new Map<string, FileInfo[]>();
+
+  for (const root of roots) {
+    const rootFiles = await scanWorkspace(root.path);
+    filesByRootId.set(root.id, rootFiles);
+
+    if (prefixPaths) {
+      for (const file of rootFiles) {
+        files.push({
+          ...file,
+          path: joinWorkspacePath(root.id, file.path),
+        });
+      }
+    } else {
+      files.push(...rootFiles);
+    }
+  }
+
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  return { files, filesByRootId, filePathSet: new Set(files.map((f) => f.path)) };
+}
+
+function resolveWorkspacePath(
+  ws: WorkspaceState,
+  rawPath: string,
+  options: { requireExists?: boolean; requireExplicitForMissing?: boolean } = {},
+): { root: WorkspaceRoot; relativePath: string; explicit: boolean } {
+  const normalized = normalizeRelativePath(rawPath);
+  if (!normalized) {
+    throw new Error("Path must be non-empty");
+  }
+  if (ws.roots.length === 0) {
+    throw new Error("Workspace has no roots");
+  }
+
+  const parts = normalized.split("/");
+  if (parts.length > 1) {
+    const rootId = parts[0];
+    const root = ws.roots.find((r) => r.id === rootId);
+    if (root) {
+      const relativePath = normalizeRelativePath(parts.slice(1).join("/"));
+      if (!relativePath) {
+        throw new Error(`Path points to root only: ${rawPath}`);
+      }
+      if (options.requireExists) {
+        const canonicalPath =
+          ws.roots.length > 1
+            ? joinWorkspacePath(root.id, relativePath)
+            : relativePath;
+        if (!ws.filePathSet.has(canonicalPath)) {
+          throw new Error(`Path not found in workspace: ${rawPath}`);
+        }
+      }
+      return { root, relativePath, explicit: true };
+    }
+  }
+
+  if (ws.roots.length === 1) {
+    const primaryRoot = ws.roots[0];
+    if (!primaryRoot) {
+      throw new Error("Workspace has no roots");
+    }
+    if (options.requireExists && !ws.filePathSet.has(normalized)) {
+      throw new Error(`Path not found in workspace: ${rawPath}`);
+    }
+    return { root: primaryRoot, relativePath: normalized, explicit: false };
+  }
+
+  const matches = ws.roots.filter((r) =>
+    ws.filePathSet.has(joinWorkspacePath(r.id, normalized)),
+  );
+  if (matches.length === 1) {
+    const match = matches[0];
+    if (!match) {
+      throw new Error("Workspace root match missing");
+    }
+    return { root: match, relativePath: normalized, explicit: false };
+  }
+
+  if (matches.length === 0) {
+    if (options.requireExplicitForMissing) {
+      const rootHints = ws.roots.map((r) => `${r.id}/`).join(", ");
+      throw new Error(
+        `Path not found: ${rawPath}. When using multiple roots, prefix with ${rootHints}.`,
+      );
+    }
+    if (options.requireExists) {
+      throw new Error(`Path not found in workspace: ${rawPath}`);
+    }
+  }
+
+  if (matches.length > 1) {
+    const rootHints = ws.roots.map((r) => `${r.id}/`).join(", ");
+    throw new Error(
+      `Path is ambiguous across roots. Prefix with ${rootHints}: ${rawPath}`,
+    );
+  }
+
+  const fallbackRoot = ws.roots[0];
+  if (!fallbackRoot) {
+    throw new Error("Workspace has no roots");
+  }
+  return { root: fallbackRoot, relativePath: normalized, explicit: false };
+}
+
+function getPrimaryRoot(ws: WorkspaceState): WorkspaceRoot | undefined {
+  return ws.roots[0];
+}
+
+async function getWorkspaceGitStatus(
+  ws: WorkspaceState,
+  limit = 200,
+): Promise<{ isRepo: boolean; changedFiles: string[] }> {
+  if (ws.roots.length === 0) {
+    return { isRepo: false, changedFiles: [] };
+  }
+
+  if (ws.roots.length === 1) {
+    const root = ws.roots[0];
+    if (!root) {
+      return { isRepo: false, changedFiles: [] };
+    }
+    const isRepo = await isGitRepo(root.path);
+    const changed = isRepo ? await getChangedFiles(root.path, { limit }) : [];
+    return { isRepo, changedFiles: changed };
+  }
+
+  const changedFiles: string[] = [];
+  let isRepo = false;
+  for (const root of ws.roots) {
+    if (changedFiles.length >= limit) {
+      break;
+    }
+    if (!(await isGitRepo(root.path))) {
+      continue;
+    }
+    isRepo = true;
+    const changed = await getChangedFiles(root.path, {
+      limit: Math.max(0, limit - changedFiles.length),
+    });
+    for (const file of changed) {
+      if (changedFiles.length >= limit) {
+        break;
+      }
+      changedFiles.push(joinWorkspacePath(root.id, file));
+    }
+  }
+
+  return { isRepo, changedFiles };
+}
+
+async function searchWorkspaceFiles(
+  ws: WorkspaceState,
+  query: string,
+  limit: number,
+): Promise<{ path: string; line: number; preview: string }[]> {
+  if (ws.roots.length === 0) {
+    return [];
+  }
+
+  if (ws.roots.length === 1) {
+    const root = ws.roots[0];
+    if (!root) {
+      return [];
+    }
+    return await searchFiles(root.path, ws.files, query, { limit });
+  }
+
+  const matches: { path: string; line: number; preview: string }[] = [];
+  for (const root of ws.roots) {
+    if (matches.length >= limit) {
+      break;
+    }
+    const files = ws.filesByRootId.get(root.id) ?? [];
+    const rootMatches = await searchFiles(
+      root.path,
+      files,
+      query,
+      { limit: Math.max(1, limit - matches.length) },
+    );
+    for (const match of rootMatches) {
+      if (matches.length >= limit) {
+        break;
+      }
+      matches.push({
+        ...match,
+        path: joinWorkspacePath(root.id, match.path),
+      });
+    }
+  }
+  return matches;
+}
+
+function createPromptResolver(ws: WorkspaceState) {
+  return {
+    resolvePath: (pathValue: string) => {
+      const resolved = resolveWorkspacePath(ws, pathValue, {
+        requireExists: true,
+      });
+      return {
+        root: resolved.root.path,
+        relativePath: resolved.relativePath,
+        rootLabel: resolved.root.id,
+      };
+    },
+    listRoots: () =>
+      ws.roots.map((root) => ({
+        root: root.path,
+        rootLabel: root.id,
+      })),
+  };
+}
+
+function pruneDiscoverRuns(limit = 20): void {
+  while (discoverRuns.size > limit) {
+    const oldest = discoverRuns.keys().next().value;
+    if (!oldest) {
+      break;
+    }
+    discoverRuns.delete(oldest);
+  }
+}
 function readWorkspaceFileText(
   ws: WorkspaceState,
   relativePath: string,
 ): { existed: boolean; text: string } {
-  const absPath = assertPathWithinRoot(ws.root, relativePath);
+  const resolved = resolveWorkspacePath(ws, relativePath, {
+    requireExplicitForMissing: true,
+  });
+  const absPath = assertPathWithinRoot(
+    resolved.root.path,
+    resolved.relativePath,
+  );
   try {
     return { existed: true, text: fs.readFileSync(absPath, "utf8") };
   } catch (err) {
@@ -384,6 +682,7 @@ async function runDiscoveryAgent(
     maxSteps: number;
     maxFiles: number;
     tokenBudget: number;
+    onLog?: (entry: string) => void;
   },
 ): Promise<{
   selection: SelectionEntry[];
@@ -392,6 +691,10 @@ async function runDiscoveryAgent(
   log: string[];
 }> {
   const log: string[] = [];
+  const pushLog = (entry: string) => {
+    log.push(entry);
+    params.onLog?.(entry);
+  };
 
   const allPaths = ws.files
     .filter((f) => !f.isBinary)
@@ -401,10 +704,7 @@ async function runDiscoveryAgent(
   const fileMapPaths = allPaths.slice(0, fileMapLimit);
   const fileMapTruncated = allPaths.length > fileMapPaths.length;
 
-  const repo = await isGitRepo(ws.root);
-  const changedFiles = repo
-    ? await getChangedFiles(ws.root, { limit: 200 })
-    : [];
+  const { isRepo: repo, changedFiles } = await getWorkspaceGitStatus(ws, 200);
 
   const rules = [
     "You are PromptKit Discovery. Your job is to select the minimum set of files needed to complete the task.",
@@ -431,7 +731,9 @@ async function runDiscoveryAgent(
     "Task:",
     params.task.trim(),
     "",
-    "Workspace file paths (relative):",
+    ws.roots.length > 1
+      ? "Workspace file paths (prefix with root folder name):"
+      : "Workspace file paths (relative):",
     "<file_map>",
     ...fileMapPaths,
     "</file_map>",
@@ -449,14 +751,17 @@ async function runDiscoveryAgent(
           "</changed_files>",
         ]
       : []),
+    ...(ws.roots.length > 1
+      ? [
+          "Note: file paths include a '<root>/' prefix when multiple roots are open. Return paths exactly as shown.",
+        ]
+      : []),
   ].join("\n");
 
-  const cwd = ws.root;
+  const cwd = getPrimaryRoot(ws)?.path;
   let context = rules;
   let lastSelection: SelectionEntry[] | null = null;
   let lastInstructions: string | undefined;
-
-  const fileSet = new Set(ws.files.map((f) => f.path));
 
   async function runProvider(prompt: string): Promise<string> {
     if (params.provider === "codex_cli") {
@@ -465,10 +770,10 @@ async function runDiscoveryAgent(
         ...(params.model ? { model: params.model } : {}),
       });
       if (res.stderr.trim()) {
-        log.push(`provider stderr: ${res.stderr.trim().slice(0, 300)}`);
+        pushLog(`provider stderr: ${res.stderr.trim().slice(0, 300)}`);
       }
       if (res.exitCode !== 0) {
-        log.push(`provider exit code: ${res.exitCode}`);
+        pushLog(`provider exit code: ${res.exitCode}`);
       }
       return res.output.trim();
     }
@@ -478,10 +783,10 @@ async function runDiscoveryAgent(
       ...(params.model ? { model: params.model } : {}),
     });
     if (res.stderr.trim()) {
-      log.push(`provider stderr: ${res.stderr.trim().slice(0, 300)}`);
+      pushLog(`provider stderr: ${res.stderr.trim().slice(0, 300)}`);
     }
     if (res.exitCode !== 0) {
-      log.push(`provider exit code: ${res.exitCode}`);
+      pushLog(`provider exit code: ${res.exitCode}`);
     }
     return res.output.trim();
   }
@@ -503,7 +808,7 @@ async function runDiscoveryAgent(
         const query = typeof args.query === "string" ? args.query : "";
         const limitRaw = typeof args.limit === "number" ? args.limit : 50;
         const limit = clampInt(limitRaw, { min: 1, max: 200 });
-        const matches = await searchFiles(ws.root, ws.files, query, { limit });
+        const matches = await searchWorkspaceFiles(ws, query, limit);
         return { query, matches };
       }
 
@@ -512,11 +817,18 @@ async function runDiscoveryAgent(
         if (!p.trim()) {
           throw new Error("read_file requires a non-empty path");
         }
-        if (!fileSet.has(p)) {
-          throw new Error(`Path not found in workspace: ${p}`);
+        let resolved: ReturnType<typeof resolveWorkspacePath>;
+        try {
+          resolved = resolveWorkspacePath(ws, p, { requireExists: true });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Invalid path";
+          throw new Error(message);
         }
-
-        const text = await readTextFile(ws.root, p, { maxBytes: 500_000 });
+        const text = await readTextFile(
+          resolved.root.path,
+          resolved.relativePath,
+          { maxBytes: 500_000 },
+        );
         const slicesRaw = Array.isArray(args.slices) ? args.slices : undefined;
         const slices = slicesRaw
           ?.map((s) =>
@@ -548,10 +860,18 @@ async function runDiscoveryAgent(
         if (!p.trim()) {
           throw new Error("get_code_structure requires a non-empty path");
         }
-        if (!fileSet.has(p)) {
-          throw new Error(`Path not found in workspace: ${p}`);
+        let resolved: ReturnType<typeof resolveWorkspacePath>;
+        try {
+          resolved = resolveWorkspacePath(ws, p, { requireExists: true });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Invalid path";
+          throw new Error(message);
         }
-        const text = await readTextFile(ws.root, p, { maxBytes: 1_000_000 });
+        const text = await readTextFile(
+          resolved.root.path,
+          resolved.relativePath,
+          { maxBytes: 1_000_000 },
+        );
         const codemap = await buildCodemapFromText(p, text);
         const { text: content, truncated } = truncate(
           codemap.trimEnd(),
@@ -570,13 +890,15 @@ async function runDiscoveryAgent(
           if (!check.success) {
             continue;
           }
-          if (!fileSet.has(check.data.path)) {
+          try {
+            resolveWorkspacePath(ws, check.data.path, { requireExists: true });
+          } catch {
             continue;
           }
           parsed.push(check.data as SelectionEntry);
         }
         const limited = parsed.slice(0, params.maxFiles);
-        const result = await buildPrompt(ws.root, limited, {
+        const result = await buildPrompt(createPromptResolver(ws), limited, {
           includeFileMap: true,
         });
         return {
@@ -588,14 +910,14 @@ async function runDiscoveryAgent(
   }
 
   for (let step = 0; step < params.maxSteps; step++) {
-    log.push(`step ${step + 1}/${params.maxSteps}: waiting for model`);
+    pushLog(`step ${step + 1}/${params.maxSteps}: waiting for model`);
     const output = await runProvider(
       `${context}\n\nReturn ONLY JSON for the next tool call or final result.`,
     );
 
     const candidate = extractJsonCandidate(output);
     if (!candidate) {
-      log.push(`step ${step + 1}: model did not return JSON`);
+      pushLog(`step ${step + 1}: model did not return JSON`);
       context += "\n\nYour last output was not JSON. Return ONLY valid JSON.";
       continue;
     }
@@ -604,7 +926,7 @@ async function runDiscoveryAgent(
     try {
       parsed = JSON.parse(candidate);
     } catch {
-      log.push(`step ${step + 1}: invalid JSON`);
+      pushLog(`step ${step + 1}: invalid JSON`);
       context +=
         "\n\nYour last output was invalid JSON. Return ONLY valid JSON.";
       continue;
@@ -618,7 +940,7 @@ async function runDiscoveryAgent(
         typeof instructionsRaw === "string" ? instructionsRaw.trim() : "";
       const rawArray = Array.isArray(selectionRaw) ? selectionRaw : null;
       if (!rawArray) {
-        log.push(`step ${step + 1}: final.selection was not an array`);
+        pushLog(`step ${step + 1}: final.selection was not an array`);
         context +=
           "\n\nYour final.selection must be an array. Return ONLY valid JSON.";
         continue;
@@ -630,7 +952,9 @@ async function runDiscoveryAgent(
         if (!check.success) {
           continue;
         }
-        if (!fileSet.has(check.data.path)) {
+        try {
+          resolveWorkspacePath(ws, check.data.path, { requireExists: true });
+        } catch {
           continue;
         }
         parsedSelection.push(check.data as SelectionEntry);
@@ -638,7 +962,7 @@ async function runDiscoveryAgent(
 
       lastSelection = parsedSelection.slice(0, params.maxFiles);
       lastInstructions = instructions;
-      log.push(
+      pushLog(
         `step ${step + 1}: got final selection (${lastSelection.length} files)`,
       );
       break;
@@ -654,13 +978,13 @@ async function runDiscoveryAgent(
         tool !== "get_code_structure" &&
         tool !== "token_estimate"
       ) {
-        log.push(`step ${step + 1}: unknown tool "${parsed.tool}"`);
+        pushLog(`step ${step + 1}: unknown tool "${parsed.tool}"`);
         context +=
           "\n\nUnknown tool. Choose one of: get_file_tree, file_search, read_file, get_code_structure, token_estimate.";
         continue;
       }
 
-      log.push(`step ${step + 1}: tool call ${tool}`);
+      pushLog(`step ${step + 1}: tool call ${tool}`);
       let toolResult: unknown;
       try {
         toolResult = await runTool(tool, args);
@@ -675,7 +999,7 @@ async function runDiscoveryAgent(
       continue;
     }
 
-    log.push(`step ${step + 1}: JSON was neither tool call nor final`);
+    pushLog(`step ${step + 1}: JSON was neither tool call nor final`);
     context +=
       '\n\nReturn either {"tool":...} or {"final":...}. Return ONLY JSON.';
   }
@@ -690,7 +1014,7 @@ async function runDiscoveryAgent(
     selection: SelectionEntry[],
     instructions?: string,
   ) => {
-    const result = await buildPrompt(ws.root, selection, {
+    const result = await buildPrompt(createPromptResolver(ws), selection, {
       includeFileMap: true,
       ...(instructions?.trim() ? { instructions: instructions.trim() } : {}),
     });
@@ -712,7 +1036,7 @@ async function runDiscoveryAgent(
       };
     }
 
-    log.push(
+    pushLog(
       `token budget exceeded: ~${res.tokenEstimate} > ${params.tokenBudget}; asking model to reduce`,
     );
     const reducePrompt = [
@@ -726,7 +1050,7 @@ async function runDiscoveryAgent(
     const output = await runProvider(reducePrompt);
     const candidate = extractJsonCandidate(output);
     if (!candidate) {
-      log.push("budget reduction: model did not return JSON");
+      pushLog("budget reduction: model did not return JSON");
       break;
     }
 
@@ -734,7 +1058,7 @@ async function runDiscoveryAgent(
     try {
       parsed = JSON.parse(candidate);
     } catch {
-      log.push("budget reduction: invalid JSON");
+      pushLog("budget reduction: invalid JSON");
       break;
     }
 
@@ -746,7 +1070,7 @@ async function runDiscoveryAgent(
         typeof instructionsRaw === "string" ? instructionsRaw.trim() : "";
       const rawArray = Array.isArray(selectionRaw) ? selectionRaw : null;
       if (!rawArray) {
-        log.push("budget reduction: final.selection was not an array");
+        pushLog("budget reduction: final.selection was not an array");
         break;
       }
 
@@ -756,7 +1080,9 @@ async function runDiscoveryAgent(
         if (!check.success) {
           continue;
         }
-        if (!fileSet.has(check.data.path)) {
+        try {
+          resolveWorkspacePath(ws, check.data.path, { requireExists: true });
+        } catch {
           continue;
         }
         parsedSelection.push(check.data as SelectionEntry);
@@ -764,17 +1090,17 @@ async function runDiscoveryAgent(
 
       currentSelection = parsedSelection.slice(0, params.maxFiles);
       currentInstructions = instructions;
-      log.push(
+      pushLog(
         `budget reduction: got revised selection (${currentSelection.length} files)`,
       );
       continue;
     }
 
-    log.push("budget reduction: response missing final");
+    pushLog("budget reduction: response missing final");
     break;
   }
 
-  const finalRes = await buildPrompt(ws.root, currentSelection, {
+  const finalRes = await buildPrompt(createPromptResolver(ws), currentSelection, {
     includeFileMap: true,
     ...(currentInstructions?.trim()
       ? { instructions: currentInstructions.trim() }
@@ -794,7 +1120,13 @@ function writeWorkspaceFileText(
   relativePath: string,
   text: string,
 ): void {
-  const absPath = assertPathWithinRoot(ws.root, relativePath);
+  const resolved = resolveWorkspacePath(ws, relativePath, {
+    requireExplicitForMissing: true,
+  });
+  const absPath = assertPathWithinRoot(
+    resolved.root.path,
+    resolved.relativePath,
+  );
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   const tmpPath = `${absPath}.tmp-${randomUUID()}`;
   fs.writeFileSync(tmpPath, text, "utf8");
@@ -802,7 +1134,13 @@ function writeWorkspaceFileText(
 }
 
 function deleteWorkspaceFile(ws: WorkspaceState, relativePath: string): void {
-  const absPath = assertPathWithinRoot(ws.root, relativePath);
+  const resolved = resolveWorkspacePath(ws, relativePath, {
+    requireExplicitForMissing: true,
+  });
+  const absPath = assertPathWithinRoot(
+    resolved.root.path,
+    resolved.relativePath,
+  );
   try {
     fs.unlinkSync(absPath);
   } catch (err) {
@@ -1062,13 +1400,29 @@ async function handleRpc(req: JsonRpcRequest): Promise<JsonRpcResponse> {
       case "workspace.open": {
         const params = OpenWorkspaceParamsSchema.parse(req.params);
         const workspaceId = randomUUID();
-        const files = await scanWorkspace(params.root);
-        const rootKey = path.resolve(params.root);
+        const rootsRaw =
+          params.roots && params.roots.length > 0
+            ? params.roots
+            : params.root
+              ? [params.root]
+              : [];
+        const roots = buildWorkspaceRoots(rootsRaw);
+        if (roots.length === 0) {
+          return jsonRpcError(id, -32602, "root or roots is required");
+        }
+        const prefixPaths = roots.length > 1;
+        const { files, filesByRootId, filePathSet } = await scanWorkspaceRoots(
+          roots,
+          prefixPaths,
+        );
+        const rootKey = buildWorkspaceRootKey(roots);
         workspaces.set(workspaceId, {
           id: workspaceId,
-          root: params.root,
+          roots,
           rootKey,
           files,
+          filesByRootId,
+          filePathSet,
           selection: [],
         });
         return jsonRpcResult(id, { workspaceId });
@@ -1089,8 +1443,13 @@ async function handleRpc(req: JsonRpcRequest): Promise<JsonRpcResponse> {
         if (!ws) {
           return jsonRpcError(id, -32004, "Unknown workspaceId");
         }
-
-        const text = await readTextFile(ws.root, params.path);
+        const resolved = resolveWorkspacePath(ws, params.path, {
+          requireExists: true,
+        });
+        const text = await readTextFile(
+          resolved.root.path,
+          resolved.relativePath,
+        );
         const slices = params.slices?.map(
           ({ startLine, endLine, description }) =>
             description === undefined
@@ -1107,11 +1466,10 @@ async function handleRpc(req: JsonRpcRequest): Promise<JsonRpcResponse> {
         if (!ws) {
           return jsonRpcError(id, -32004, "Unknown workspaceId");
         }
-        const matches = await searchFiles(
-          ws.root,
-          ws.files,
+        const matches = await searchWorkspaceFiles(
+          ws,
           params.query,
-          params.limit === undefined ? {} : { limit: params.limit },
+          params.limit ?? 200,
         );
         return jsonRpcResult(id, { matches });
       }
@@ -1123,7 +1481,14 @@ async function handleRpc(req: JsonRpcRequest): Promise<JsonRpcResponse> {
           return jsonRpcError(id, -32004, "Unknown workspaceId");
         }
 
-        const file = ws.files.find((f) => f.path === params.path);
+        const resolved = resolveWorkspacePath(ws, params.path, {
+          requireExists: true,
+        });
+        const lookupPath =
+          ws.roots.length > 1
+            ? joinWorkspacePath(resolved.root.id, resolved.relativePath)
+            : resolved.relativePath;
+        const file = ws.files.find((f) => f.path === lookupPath);
         if (!file) {
           return jsonRpcError(id, -32004, `File not found: ${params.path}`);
         }
@@ -1135,7 +1500,10 @@ async function handleRpc(req: JsonRpcRequest): Promise<JsonRpcResponse> {
           );
         }
 
-        const text = await readTextFile(ws.root, params.path);
+        const text = await readTextFile(
+          resolved.root.path,
+          resolved.relativePath,
+        );
         const codemap = await buildCodemapFromText(params.path, text);
         return jsonRpcResult(id, { path: params.path, codemap });
       }
@@ -1183,7 +1551,11 @@ async function handleRpc(req: JsonRpcRequest): Promise<JsonRpcResponse> {
             ? {}
             : { codemapMode: params.codemapMode }),
         };
-        const result = await buildPrompt(ws.root, selection, options);
+        const result = await buildPrompt(
+          createPromptResolver(ws),
+          selection,
+          options,
+        );
         return jsonRpcResult(id, result);
       }
 
@@ -1193,9 +1565,14 @@ async function handleRpc(req: JsonRpcRequest): Promise<JsonRpcResponse> {
         if (!ws) {
           return jsonRpcError(id, -32004, "Unknown workspaceId");
         }
+        const primaryRoot = getPrimaryRoot(ws);
+        if (!primaryRoot) {
+          return jsonRpcError(id, -32004, "Workspace has no roots");
+        }
         return jsonRpcResult(id, {
           workspaceId: ws.id,
-          root: ws.root,
+          root: primaryRoot.path,
+          roots: ws.roots.map((r) => r.path),
           fileCount: ws.files.length,
           selection: ws.selection,
         });
@@ -1208,11 +1585,86 @@ async function handleRpc(req: JsonRpcRequest): Promise<JsonRpcResponse> {
           return jsonRpcError(id, -32004, "Unknown workspaceId");
         }
 
-        const isRepo = await isGitRepo(ws.root);
-        const changedFiles = isRepo
-          ? await getChangedFiles(ws.root, { limit: 200 })
-          : [];
-        return jsonRpcResult(id, { isRepo, changedFiles });
+        const status = await getWorkspaceGitStatus(ws, 200);
+        return jsonRpcResult(id, status);
+      }
+
+      case "workspace.discoverStart": {
+        const params = DiscoverStartParamsSchema.parse(req.params);
+        const ws = workspaces.get(params.workspaceId);
+        if (!ws) {
+          return jsonRpcError(id, -32004, "Unknown workspaceId");
+        }
+
+        const maxSteps = clampInt(params.maxSteps ?? 6, { min: 1, max: 20 });
+        const maxFiles = clampInt(params.maxFiles ?? 25, { min: 1, max: 200 });
+        const tokenBudget = clampInt(params.tokenBudget ?? 60_000, {
+          min: 1_000,
+          max: 500_000,
+        });
+
+        const runId = randomUUID();
+        const run: DiscoverRun = {
+          id: runId,
+          workspaceId: ws.id,
+          status: "running",
+          log: [],
+          startedAt: new Date().toISOString(),
+        };
+        discoverRuns.set(runId, run);
+        pruneDiscoverRuns();
+
+        const pushLog = (entry: string) => {
+          run.log.push(entry);
+        };
+
+        void runDiscoveryAgent(ws, {
+          task: params.task,
+          provider: params.provider,
+          ...(params.model ? { model: params.model } : {}),
+          maxSteps,
+          maxFiles,
+          tokenBudget,
+          onLog: pushLog,
+        })
+          .then((result) => {
+            run.status = "complete";
+            run.selection = result.selection;
+            run.tokenEstimate = result.tokenEstimate;
+            run.handoff = result.prompt;
+            run.log = result.log;
+            run.finishedAt = new Date().toISOString();
+            ws.selection = result.selection;
+          })
+          .catch((err) => {
+            const message = err instanceof Error ? err.message : "Discovery failed";
+            run.status = "error";
+            run.error = message;
+            run.finishedAt = new Date().toISOString();
+          });
+
+        return jsonRpcResult(id, { runId, status: "running", log: run.log });
+      }
+
+      case "workspace.discoverStatus": {
+        const params = DiscoverStatusParamsSchema.parse(req.params);
+        const run = discoverRuns.get(params.runId);
+        if (!run) {
+          return jsonRpcError(id, -32004, "Unknown discovery run");
+        }
+
+        return jsonRpcResult(id, {
+          status: run.status,
+          log: run.log,
+          ...(run.status === "complete"
+            ? {
+                selection: run.selection ?? [],
+                tokenEstimate: run.tokenEstimate ?? 0,
+                handoff: run.handoff ?? "",
+              }
+            : {}),
+          ...(run.status === "error" ? { error: run.error ?? "Unknown error" } : {}),
+        });
       }
 
       case "workspace.discover": {
@@ -1410,7 +1862,7 @@ async function handleRpc(req: JsonRpcRequest): Promise<JsonRpcResponse> {
         const ws = params.workspaceId
           ? workspaces.get(params.workspaceId)
           : undefined;
-        const cwd = ws?.root;
+        const cwd = ws ? getPrimaryRoot(ws)?.path : undefined;
 
         try {
           if (params.provider === "codex_cli") {

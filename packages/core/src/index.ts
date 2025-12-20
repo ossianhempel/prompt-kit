@@ -13,7 +13,11 @@ export { readTextFile, sliceTextByLines } from "./read.js";
 export type { SearchMatch, SearchOptions } from "./search.js";
 export { searchFiles } from "./search.js";
 
-export type { PromptBuildOptions, PromptBuildResult } from "./prompt.js";
+export type {
+  PromptBuildOptions,
+  PromptBuildResult,
+  PromptRootResolver,
+} from "./prompt.js";
 export { buildPrompt, estimateTokens } from "./prompt.js";
 
 export { getChangedFiles, getGitDiff, isGitRepo } from "./git.js";

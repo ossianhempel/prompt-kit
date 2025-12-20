@@ -91,6 +91,8 @@ export const DaemonMethodSchema = z.enum([
   "workspace.getContext",
   "workspace.getGitStatus",
   "workspace.discover",
+  "workspace.discoverStart",
+  "workspace.discoverStatus",
   "workspace.previewEdits",
   "workspace.applyEdits",
   "workspace.undoEdits",
@@ -101,9 +103,17 @@ export const DaemonMethodSchema = z.enum([
 ]);
 export type DaemonMethod = z.infer<typeof DaemonMethodSchema>;
 
-export const OpenWorkspaceParamsSchema = z.object({
-  root: z.string().min(1),
-});
+export const OpenWorkspaceParamsSchema = z
+  .object({
+    root: z.string().min(1).optional(),
+    roots: z.array(z.string().min(1)).optional(),
+  })
+  .refine((params) => {
+    if (typeof params.root === "string" && params.root.trim().length > 0) {
+      return true;
+    }
+    return Array.isArray(params.roots) && params.roots.length > 0;
+  }, "root or roots is required");
 export type OpenWorkspaceParams = z.infer<typeof OpenWorkspaceParamsSchema>;
 
 export const OpenWorkspaceResultSchema = z.object({
@@ -216,6 +226,7 @@ export type WorkspaceContextParams = z.infer<
 export const WorkspaceContextResultSchema = z.object({
   workspaceId: z.string().min(1),
   root: z.string().min(1),
+  roots: z.array(z.string().min(1)).optional(),
   fileCount: z.number().int().nonnegative(),
   selection: z.array(SelectionEntrySchema),
 });
@@ -382,6 +393,31 @@ export const DiscoverResultSchema = z.object({
   log: z.array(z.string()),
 });
 export type DiscoverResult = z.infer<typeof DiscoverResultSchema>;
+
+export const DiscoverStartParamsSchema = DiscoverParamsSchema;
+export type DiscoverStartParams = z.infer<typeof DiscoverStartParamsSchema>;
+
+export const DiscoverStartResultSchema = z.object({
+  runId: z.string().min(1),
+  status: z.enum(["running"]),
+  log: z.array(z.string()),
+});
+export type DiscoverStartResult = z.infer<typeof DiscoverStartResultSchema>;
+
+export const DiscoverStatusParamsSchema = z.object({
+  runId: z.string().min(1),
+});
+export type DiscoverStatusParams = z.infer<typeof DiscoverStatusParamsSchema>;
+
+export const DiscoverStatusResultSchema = z.object({
+  status: z.enum(["running", "complete", "error"]),
+  log: z.array(z.string()),
+  selection: z.array(SelectionEntrySchema).optional(),
+  tokenEstimate: z.number().int().nonnegative().optional(),
+  handoff: z.string().optional(),
+  error: z.string().optional(),
+});
+export type DiscoverStatusResult = z.infer<typeof DiscoverStatusResultSchema>;
 
 export const ProvidersRunParamsSchema = z.object({
   workspaceId: z.string().min(1).optional(),

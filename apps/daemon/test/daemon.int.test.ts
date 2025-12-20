@@ -199,10 +199,12 @@ describe.sequential("daemon RPC (integration)", () => {
   let healthUrl = "";
   let proc: ReturnType<typeof spawn> | null = null;
   let workspaceRoot = "";
+  let workspaceRoot2 = "";
   let configDir = "";
   let binDir = "";
   let stateFile = "";
   let workspaceId = "";
+  let workspaceIdMulti = "";
 
   beforeAll(async () => {
     port = await getFreePort();
@@ -214,6 +216,7 @@ describe.sequential("daemon RPC (integration)", () => {
       `promptkit-daemon-int-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     );
     workspaceRoot = path.join(base, "workspace");
+    workspaceRoot2 = path.join(base, "workspace2");
     configDir = path.join(base, "config");
     binDir = path.join(base, "bin");
     stateFile = path.join(base, "state.json");
@@ -228,6 +231,19 @@ describe.sequential("daemon RPC (integration)", () => {
     writeFileSync(
       path.join(workspaceRoot, "hello.txt"),
       "one\ntwo\nneedle here\n",
+      "utf8",
+    );
+
+    mkdirSync(workspaceRoot2, { recursive: true });
+    mkdirSync(path.join(workspaceRoot2, "lib"), { recursive: true });
+    writeFileSync(
+      path.join(workspaceRoot2, "lib", "util.ts"),
+      "export const answer = 42;\n",
+      "utf8",
+    );
+    writeFileSync(
+      path.join(workspaceRoot2, "notes.md"),
+      "multi-root needle\n",
       "utf8",
     );
 
@@ -358,6 +374,54 @@ describe.sequential("daemon RPC (integration)", () => {
     expect(selection.selection.map((s) => s.path)).toContain("src/main.ts");
   });
 
+  it("streams discovery progress via discoverStart/discoverStatus", async () => {
+    const start = await rpc<{ runId: string; status: string; log: string[] }>(
+      rpcUrl,
+      "workspace.discoverStart",
+      {
+        workspaceId,
+        task: "understand the repo and pick relevant files",
+        provider: "codex_cli",
+        maxSteps: 6,
+        maxFiles: 10,
+        tokenBudget: 10_000,
+      },
+    );
+    expect(start.status).toBe("running");
+    expect(start.runId.length).toBeGreaterThan(0);
+
+    let status: {
+      status: string;
+      log: string[];
+      selection?: { path: string; mode: string }[];
+      tokenEstimate?: number;
+      handoff?: string;
+    } | null = null;
+
+    for (let i = 0; i < 20; i++) {
+      status = await rpc<{
+        status: string;
+        log: string[];
+        selection?: { path: string; mode: string }[];
+        tokenEstimate?: number;
+        handoff?: string;
+      }>(rpcUrl, "workspace.discoverStatus", { runId: start.runId });
+
+      if (status.status !== "running") {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    expect(status?.status).toBe("complete");
+    expect(status?.selection).toEqual([
+      { path: "src/main.ts", mode: "full" },
+    ]);
+    expect(status?.tokenEstimate ?? 0).toBeGreaterThan(10);
+    expect(status?.handoff ?? "").toContain("<file_contents>");
+    expect(status?.log.join("\n") ?? "").toContain("step");
+  });
+
   it("applies and undoes edits with checkpoints", async () => {
     const xml = [
       "<edits>",
@@ -396,5 +460,63 @@ describe.sequential("daemon RPC (integration)", () => {
       { workspaceId, path: "hello.txt" },
     );
     expect(restored.content).toContain("needle here");
+  });
+
+  it("supports multi-root workspaces", async () => {
+    const opened = await rpc<{ workspaceId: string }>(
+      rpcUrl,
+      "workspace.open",
+      {
+        roots: [workspaceRoot, workspaceRoot2],
+      },
+    );
+    workspaceIdMulti = opened.workspaceId;
+    expect(workspaceIdMulti.length).toBeGreaterThan(0);
+
+    const tree = await rpc<{ files: { path: string }[] }>(
+      rpcUrl,
+      "workspace.getFileTree",
+      { workspaceId: workspaceIdMulti },
+    );
+    const paths = tree.files.map((f) => f.path);
+    expect(paths).toContain("workspace/hello.txt");
+    expect(paths).toContain("workspace/src/main.ts");
+    expect(paths).toContain("workspace2/notes.md");
+    expect(paths).toContain("workspace2/lib/util.ts");
+
+    const file = await rpc<{ path: string; content: string }>(
+      rpcUrl,
+      "workspace.readFile",
+      { workspaceId: workspaceIdMulti, path: "workspace2/notes.md" },
+    );
+    expect(file.content).toContain("multi-root needle");
+
+    const search = await rpc<{ matches: { path: string; line: number }[] }>(
+      rpcUrl,
+      "workspace.search",
+      { workspaceId: workspaceIdMulti, query: "needle", limit: 10 },
+    );
+    const searchPaths = search.matches.map((m) => m.path);
+    expect(searchPaths).toContain("workspace/hello.txt");
+    expect(searchPaths).toContain("workspace2/notes.md");
+
+    const codemap = await rpc<{ path: string; codemap: string }>(
+      rpcUrl,
+      "workspace.getCodeStructure",
+      { workspaceId: workspaceIdMulti, path: "workspace2/lib/util.ts" },
+    );
+    expect(codemap.path).toBe("workspace2/lib/util.ts");
+    expect(codemap.codemap.toLowerCase()).toContain("const");
+
+    const prompt = await rpc<{ prompt: string }>(
+      rpcUrl,
+      "workspace.buildPrompt",
+      {
+        workspaceId: workspaceIdMulti,
+        selection: [{ path: "workspace2/lib/util.ts", mode: "full" }],
+        includeFileMap: true,
+      },
+    );
+    expect(prompt.prompt).toContain("workspace2/lib/util.ts");
   });
 });

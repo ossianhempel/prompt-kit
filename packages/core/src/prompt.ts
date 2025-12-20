@@ -3,6 +3,15 @@ import { getGitDiff } from "./git.js";
 import { readTextFile, sliceTextByLines } from "./read.js";
 import type { CodemapMode, GitDiffMode, SelectionEntry } from "./types.js";
 
+export type PromptRootResolver = {
+  resolvePath: (path: string) => {
+    root: string;
+    relativePath: string;
+    rootLabel?: string;
+  };
+  listRoots?: () => { root: string; rootLabel?: string }[];
+};
+
 function wrapCdata(text: string): string {
   return text.replaceAll("]]>", "]]]]><![CDATA[>");
 }
@@ -22,10 +31,17 @@ export interface PromptBuildResult {
 }
 
 export async function buildPrompt(
-  root: string,
+  root: string | PromptRootResolver,
   selection: SelectionEntry[],
   options: PromptBuildOptions = {},
 ): Promise<PromptBuildResult> {
+  const resolver: PromptRootResolver =
+    typeof root === "string"
+      ? {
+          resolvePath: (path) => ({ root, relativePath: path }),
+          listRoots: () => [{ root }],
+        }
+      : root;
   const includeFileMap = options.includeFileMap ?? true;
   const maxFileBytes = options.maxFileBytes ?? 5_000_000;
   const gitDiffMode = options.gitDiffMode ?? "none";
@@ -35,14 +51,16 @@ export async function buildPrompt(
   const textCache = new Map<string, string>();
 
   async function loadText(relativePath: string): Promise<string> {
-    const cached = textCache.get(relativePath);
-    if (cached !== undefined) {
-      return cached;
+    const resolved = resolver.resolvePath(relativePath);
+    const cacheKey = `${resolved.root}::${resolved.relativePath}`;
+    const cachedResolved = textCache.get(cacheKey);
+    if (cachedResolved !== undefined) {
+      return cachedResolved;
     }
-    const text = await readTextFile(root, relativePath, {
+    const text = await readTextFile(resolved.root, resolved.relativePath, {
       maxBytes: maxFileBytes,
     });
-    textCache.set(relativePath, text);
+    textCache.set(cacheKey, text);
     return text;
   }
 
@@ -120,24 +138,79 @@ export async function buildPrompt(
   parts.push("</file_contents>");
 
   if (gitDiffMode !== "none") {
-    const { diff, truncated } = await getGitDiff(root, {
-      mode: gitDiffMode,
-      paths: selection.map((e) => e.path),
-      maxBytes: maxGitDiffBytes,
-    });
+    const rootsByPath = new Map<
+      string,
+      { rootLabel: string | undefined; paths: string[] }
+    >();
+    for (const entry of selection) {
+      const resolved = resolver.resolvePath(entry.path);
+      const existing = rootsByPath.get(resolved.root) ?? {
+        rootLabel: resolved.rootLabel ?? undefined,
+        paths: [] as string[],
+      };
+      existing.paths.push(resolved.relativePath);
+      if (!existing.rootLabel && resolved.rootLabel) {
+        existing.rootLabel = resolved.rootLabel;
+      }
+      rootsByPath.set(resolved.root, existing);
+    }
 
-    if (diff.trim().length > 0) {
+    const listedRoots = resolver.listRoots?.();
+    const rootsList =
+      listedRoots && listedRoots.length > 0
+        ? listedRoots
+        : [...rootsByPath.entries()].map(([rootPath, info]) => ({
+            root: rootPath,
+            rootLabel: info.rootLabel,
+          }));
+    const multipleRoots = rootsList.length > 1;
+    const perRootMax =
+      multipleRoots && rootsList.length > 0
+        ? Math.max(64_000, Math.floor(maxGitDiffBytes / rootsList.length))
+        : maxGitDiffBytes;
+
+    const diffParts: string[] = [];
+    let anyDiff = false;
+    let anyTruncated = false;
+
+    for (const rootInfo of rootsList) {
+      const selected = rootsByPath.get(rootInfo.root)?.paths ?? [];
+      if (gitDiffMode === "selected" && selected.length === 0) {
+        continue;
+      }
+      const { diff, truncated } = await getGitDiff(rootInfo.root, {
+        mode: gitDiffMode,
+        paths: selected,
+        maxBytes: perRootMax,
+      });
+      if (!diff.trim()) {
+        if (truncated) {
+          anyTruncated = true;
+        }
+        continue;
+      }
+      anyDiff = true;
+      if (multipleRoots) {
+        diffParts.push(`# Root: ${rootInfo.rootLabel ?? rootInfo.root}`, "");
+      }
+      diffParts.push(diff.trimEnd(), "");
+      if (truncated) {
+        diffParts.push("# (diff output truncated)", "");
+        anyTruncated = true;
+      }
+    }
+
+    if (anyDiff) {
+      const combined = diffParts.join("\n").replaceAll(/\n+$/g, "\n");
       parts.push("", "<git_diff>");
       parts.push("<![CDATA[");
-      parts.push(wrapCdata(diff.trimEnd()));
-      if (truncated) {
-        parts.push("", "# (diff output truncated)");
-      }
+      parts.push(wrapCdata(combined.trimEnd()));
       parts.push("]]>");
       parts.push("</git_diff>");
     } else {
+      const note = anyTruncated ? " (output truncated)" : "";
       parts.push("", "<git_diff>");
-      parts.push("<![CDATA[(no git changes or not a git repo)]]>");
+      parts.push(`<![CDATA[(no git changes or not a git repo)${note}]]>`);
       parts.push("</git_diff>");
     }
   }

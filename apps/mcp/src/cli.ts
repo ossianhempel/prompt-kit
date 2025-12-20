@@ -67,8 +67,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description: "Absolute path to workspace root.",
             },
+            roots: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Absolute paths to workspace roots (multi-root workspace).",
+            },
           },
-          required: ["root"],
           additionalProperties: false,
         },
       },
@@ -98,7 +103,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             path: {
               type: "string",
-              description: "Path relative to the workspace root.",
+              description:
+                "Path relative to the workspace root (prefix with root folder name when multiple roots are open).",
             },
             slices: {
               type: "array",
@@ -147,7 +153,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             path: {
               type: "string",
-              description: "Path relative to the workspace root.",
+              description:
+                "Path relative to the workspace root (prefix with root folder name when multiple roots are open).",
             },
           },
           required: ["path"],
@@ -174,7 +181,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               items: {
                 type: "object",
                 properties: {
-                  path: { type: "string" },
+                  path: {
+                    type: "string",
+                    description:
+                      "Path relative to the workspace root (prefix with root folder name when multiple roots are open).",
+                  },
                   mode: {
                     type: "string",
                     enum: ["full", "slices", "codemap_only"],
@@ -401,11 +412,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     switch (name) {
       case "open_workspace": {
-        const root = args.root;
-        if (typeof root !== "string" || root.trim().length === 0) {
-          throw new Error("root must be a non-empty string");
+        const root =
+          typeof args.root === "string" ? args.root.trim() : "";
+        const roots = Array.isArray(args.roots)
+          ? args.roots
+              .filter((r) => typeof r === "string")
+              .map((r) => r.trim())
+              .filter((r) => r.length > 0)
+          : [];
+        if (!root && roots.length === 0) {
+          throw new Error("Provide root or roots.");
         }
-        const result = await callDaemon("workspace.open", { root });
+        const result = await callDaemon(
+          "workspace.open",
+          roots.length > 0 ? { roots } : { root },
+        );
         const parsed = asObject(result);
         const id = parsed.workspaceId;
         if (typeof id !== "string" || id.length === 0) {

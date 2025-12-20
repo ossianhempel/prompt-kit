@@ -5,6 +5,7 @@ use std::{
 };
 
 use serde::Serialize;
+use tauri::Manager;
 
 fn command_from_env(var: &str, fallback: &str) -> String {
     match std::env::var(var) {
@@ -112,6 +113,41 @@ fn ensure_daemon_dist(root: &PathBuf) -> Result<PathBuf, String> {
     Ok(daemon_dist)
 }
 
+fn bundled_daemon_entry(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let resource_dir = app.path().resource_dir().ok()?;
+    let entry = resource_dir.join("daemon").join("index.js");
+    if entry.exists() {
+        Some(entry)
+    } else {
+        None
+    }
+}
+
+fn bundled_node_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let resource_dir = app.path().resource_dir().ok()?;
+    let node_name = if cfg!(windows) { "node.exe" } else { "node" };
+    let candidate = resource_dir.join("node").join(node_name);
+    if candidate.exists() {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+fn resolve_node_command(app: &tauri::AppHandle) -> PathBuf {
+    if let Ok(env) = std::env::var("PROMPTKIT_NODE") {
+        if !env.trim().is_empty() {
+            return PathBuf::from(env);
+        }
+    }
+
+    if let Some(node) = bundled_node_binary(app) {
+        return node;
+    }
+
+    PathBuf::from("node")
+}
+
 #[tauri::command]
 fn daemon_status(state: tauri::State<'_, DaemonState>) -> Option<DaemonInfo> {
     let mut guard = state.0.lock().ok()?;
@@ -131,6 +167,7 @@ fn daemon_status(state: tauri::State<'_, DaemonState>) -> Option<DaemonInfo> {
 
 #[tauri::command]
 fn start_daemon(
+    app: tauri::AppHandle,
     state: tauri::State<'_, DaemonState>,
     port: Option<u16>,
 ) -> Result<DaemonInfo, String> {
@@ -148,10 +185,19 @@ fn start_daemon(
         *guard = None;
     }
 
-    let root = repo_root()?;
-    let dist_script = ensure_daemon_dist(&root)?;
+    let (dist_script, daemon_cwd) = match bundled_daemon_entry(&app) {
+        Some(entry) => {
+            let cwd = entry.parent().map(|p| p.to_path_buf());
+            (entry, cwd)
+        }
+        None => {
+            let root = repo_root()?;
+            let dist = ensure_daemon_dist(&root)?;
+            (dist, Some(root))
+        }
+    };
 
-    let node_cmd = command_from_env("PROMPTKIT_NODE", "node");
+    let node_cmd = resolve_node_command(&app);
     let mut command = Command::new(&node_cmd);
     command
         .arg(dist_script)
@@ -159,6 +205,10 @@ fn start_daemon(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+
+    if let Some(cwd) = daemon_cwd {
+        command.current_dir(cwd);
+    }
 
     if let Some(dir) = config_dir() {
         let _ = std::fs::create_dir_all(&dir);
@@ -180,7 +230,7 @@ fn start_daemon(
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 return format!(
-                    "Command not found: {node_cmd}. Install Node.js, or set PROMPTKIT_NODE to the full path of your node binary.\n\nIf you launched PromptKit from Finder, try launching it from a terminal so it inherits your shell PATH."
+                    "Command not found: {node_cmd}. Install Node.js, or set PROMPTKIT_NODE to the full path of your node binary.\n\nIf you launched PromptKit from Finder, try launching it from a terminal so it inherits your shell PATH. Packaged builds can bundle Node by placing it at resources/node."
                 );
             }
             format!("Failed to start daemon: {e}")

@@ -11,3 +11,5 @@ coverage/
 *.log
 
 apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/resources/daemon/
+apps/desktop/src-tauri/resources/node/
